@@ -1,0 +1,174 @@
+# @module sfa.network
+# @means  General fully connected linear network from the original C++ Network.
+# The adaptive SFA solver uses a specialized single-layer layout for speed.
+
+extern {
+    function calloc(count: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function sqrt(x: f64) -> f64
+}
+
+export struct Network {
+    layers: i32,
+    topology: ptr<i32>,
+    offsets: ptr<i32>,
+    weight_offsets: ptr<i32>,
+    outputs: ptr<f64>,
+    weights: ptr<f64>,
+    deltas: ptr<f64>,
+    neuron_count: i32,
+    weight_count: i32
+}
+
+export function network_new(topology: ptr<i32>, layers: i32, seed: i64) -> Network {
+    let widths: ptr<i32> = calloc(layers as i64, 4) as ptr<i32>
+    let offsets: ptr<i32> = calloc(layers as i64, 4) as ptr<i32>
+    let weight_offsets: ptr<i32> = calloc(layers as i64, 4) as ptr<i32>
+    let mut neurons: i32 = 0
+    let mut connections: i32 = 0
+
+    if widths != null and offsets != null and weight_offsets != null {
+        for l in 0 to layers {
+            widths[l] = topology[l]
+            offsets[l] = neurons
+            weight_offsets[l] = connections
+            neurons = neurons + topology[l]
+            if l + 1 < layers {
+                connections = connections + topology[l] * topology[l + 1]
+            }
+        }
+    }
+
+    let mut net: Network = Network {
+        layers: layers,
+        topology: widths,
+        offsets: offsets,
+        weight_offsets: weight_offsets,
+        outputs: calloc(neurons as i64, 8) as ptr<f64>,
+        weights: calloc(connections as i64, 8) as ptr<f64>,
+        deltas: calloc(connections as i64, 8) as ptr<f64>,
+        neuron_count: neurons,
+        weight_count: connections
+    }
+    if !network_valid(&net) {
+        return net
+    }
+    let mut rng: i64 = seed % 2147483647
+    if rng <= 0 {
+        rng = 1
+    }
+    for i in 0 to net.weight_count {
+        rng = (rng * 48271) % 2147483647
+        net.weights[i] = 2.0 * (rng as f64) / 2147483647.0 - 1.0
+    }
+    # Historical constructor normalizes the incoming weights to each output.
+    for o in 0 to topology[layers - 1] {
+        network_normalize(&net, o)
+    }
+    return net
+}
+
+export function network_valid(net: ptr<Network>) -> bool {
+    return net[0].layers >= 2 and net[0].topology != null and
+        net[0].offsets != null and net[0].weight_offsets != null and
+        net[0].weights != null and net[0].deltas != null and
+        net[0].outputs != null
+}
+
+# The original code subtracts sum(weights) / 101 before L2 normalization.
+# Keep that historical convention here, even for topology != [101, 1].
+export function network_normalize(net: ptr<Network>, output: i32) -> void {
+    let mut sum: f64 = 0.0
+    for l in 1 to net[0].layers {
+        let prev: i32 = net[0].topology[l - 1]
+        let current: i32 = net[0].topology[l]
+        if output < current {
+            for i in 0 to prev {
+                sum = sum + net[0].weights[net[0].weight_offsets[l - 1] + i * current + output]
+            }
+        }
+    }
+    let avg: f64 = sum / 101.0
+    let mut squared: f64 = 0.0
+    for l in 1 to net[0].layers {
+        let prev: i32 = net[0].topology[l - 1]
+        let current: i32 = net[0].topology[l]
+        if output < current {
+            for i in 0 to prev {
+                let idx: i32 = net[0].weight_offsets[l - 1] + i * current + output
+                let w: f64 = net[0].weights[idx] - avg
+                net[0].weights[idx] = w
+                squared = squared + w * w
+            }
+        }
+    }
+    if squared <= 0.0 {
+        return
+    }
+    let inv_norm: f64 = 1.0 / sqrt(squared)
+    for l in 1 to net[0].layers {
+        let prev: i32 = net[0].topology[l - 1]
+        let current: i32 = net[0].topology[l]
+        if output < current {
+            for i in 0 to prev {
+                let idx: i32 = net[0].weight_offsets[l - 1] + i * current + output
+                net[0].weights[idx] = net[0].weights[idx] * inv_norm
+            }
+        }
+    }
+}
+
+export function network_forward(net: ptr<Network>, values: ptr<f64>) -> void {
+    for i in 0 to net[0].topology[0] {
+        net[0].outputs[i] = values[i]
+    }
+    for l in 1 to net[0].layers {
+        let n_prev: i32 = net[0].topology[l - 1]
+        let n_current: i32 = net[0].topology[l]
+        let prev_start: i32 = net[0].offsets[l - 1]
+        let current_start: i32 = net[0].offsets[l]
+        let weight_start: i32 = net[0].weight_offsets[l - 1]
+        for j in 0 to n_current {
+            let mut total: f64 = 0.0
+            for i in 0 to n_prev {
+                total = total + net[0].outputs[prev_start + i] *
+                    net[0].weights[weight_start + i * n_current + j]
+            }
+            net[0].outputs[current_start + j] = total
+        }
+    }
+}
+
+export function network_result(net: ptr<Network>, output: i32) -> f64 {
+    let last: i32 = net[0].layers - 1
+    if output < 0 or output >= net[0].topology[last] {
+        return 0.0
+    }
+    return net[0].outputs[net[0].offsets[last] + output]
+}
+
+export function network_set_delta(net: ptr<Network>, layer: i32, i: i32, j: i32, value: f64) -> void {
+    if layer < 0 or layer >= net[0].layers - 1 {
+        return
+    }
+    let width: i32 = net[0].topology[layer + 1]
+    if i < 0 or j < 0 or i >= net[0].topology[layer] or j >= width {
+        return
+    }
+    net[0].deltas[net[0].weight_offsets[layer] + i * width + j] = value
+}
+
+export function network_update(net: ptr<Network>) -> void {
+    for i in 0 to net[0].weight_count {
+        net[0].weights[i] = net[0].weights[i] + net[0].deltas[i]
+    }
+}
+
+export function network_free(net: ptr<Network>) -> void {
+    free(net[0].topology as ptr<void>)
+    free(net[0].offsets as ptr<void>)
+    free(net[0].weight_offsets as ptr<void>)
+    free(net[0].outputs as ptr<void>)
+    free(net[0].weights as ptr<void>)
+    free(net[0].deltas as ptr<void>)
+}
