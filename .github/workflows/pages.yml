@@ -46,9 +46,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang make libomp-dev
 
-      - name: Install browser WebAssembly toolchain
-        run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends emscripten
+      - name: Install pinned official Emscripten SDK
+        uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: "5.0.1"
+          actions-cache-folder: emsdk-cache
+
+      - name: Check Emscripten compiler version
+        run: emcc --version
 
       - name: Validate exporter and browser JavaScript
         run: |
