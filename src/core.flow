@@ -260,20 +260,22 @@ export function sfa_f(s: ptr<SfaState>) -> f64 {
 # This order exactly follows OscillateFeedForward{Tuple}: smooth input,
 # estimate variance from previous y, read new y, smooth y, form deltas.
 export function sfa_step(s: ptr<SfaState>, time: i32, adapt: bool) -> void {
+    let mut active: i32 = -1
     if s[0].outputs == 1 {
-        sfa_hot(s, signal_one(s[0].ro, time), 1)
+        let position: i32 = signal_one(s[0].ro, time)
+        sfa_hot(s, position, 1)
+        active = position - 1
     } else {
         let pair: SignalPair = signal_two(s[0].ro, time)
         sfa_hot(s, pair.first, pair.second)
+        active = (pair.second - 1) * s[0].width + pair.first - 1
     }
 
     let gl: f64 = s[0].gamma_long
     let gs: f64 = s[0].gamma_short
-    for i in 0 to s[0].inputs {
-        let x: f64 = s[0].input[i]
-        s[0].xbar[i] = gl * s[0].xbar[i] + (1.0 - gl) * x
-        s[0].xtilde[i] = gs * s[0].xtilde[i] + (1.0 - gs) * x
-    }
+    # Input means are independent of the forward projection and output
+    # variances. Update them in the final weight pass (or warm-up pass)
+    # to avoid scanning the entire input space twice during adaptation.
 
     let old_long0: f64 = s[0].y0 - s[0].ybar0
     let old_short0: f64 = s[0].y0 - s[0].ytilde0
@@ -287,12 +289,15 @@ export function sfa_step(s: ptr<SfaState>, time: i32, adapt: bool) -> void {
         s[0].u1 = gl * s[0].u1 + (1.0 - gl) * old_short1 * old_short1
     }
 
+    # The oscillating input is exactly one-hot: the linear projection is
+    # one indexed weight per output, not a sum across 101/2601 zeros.
+    # Input smoothing and gradients still update all coordinates.
     let mut raw0: f64 = 0.0
     let mut raw1: f64 = 0.0
-    for i in 0 to s[0].inputs {
-        raw0 = raw0 + s[0].input[i] * s[0].weights[i * s[0].outputs]
+    if active >= 0 and active < s[0].inputs {
+        raw0 = s[0].weights[active * s[0].outputs]
         if s[0].outputs == 2 {
-            raw1 = raw1 + s[0].input[i] * s[0].weights[i * 2 + 1]
+            raw1 = s[0].weights[active * 2 + 1]
         }
     }
     if s[0].outputs == 2 {
@@ -309,6 +314,11 @@ export function sfa_step(s: ptr<SfaState>, time: i32, adapt: bool) -> void {
     }
 
     if !adapt {
+        for i in 0 to s[0].inputs {
+            let x: f64 = s[0].input[i]
+            s[0].xbar[i] = gl * s[0].xbar[i] + (1.0 - gl) * x
+            s[0].xtilde[i] = gs * s[0].xtilde[i] + (1.0 - gs) * x
+        }
         return
     }
     let alpha: f64 = 0.001
@@ -322,8 +332,13 @@ export function sfa_step(s: ptr<SfaState>, time: i32, adapt: bool) -> void {
     let dt1: f64 = s[0].y1 - s[0].ytilde1
 
     for i in 0 to s[0].inputs {
-        let xl: f64 = s[0].input[i] - s[0].xbar[i]
-        let xs: f64 = s[0].input[i] - s[0].xtilde[i]
+        let x: f64 = s[0].input[i]
+        let long_mean: f64 = gl * s[0].xbar[i] + (1.0 - gl) * x
+        let short_mean: f64 = gs * s[0].xtilde[i] + (1.0 - gs) * x
+        s[0].xbar[i] = long_mean
+        s[0].xtilde[i] = short_mean
+        let xl: f64 = x - long_mean
+        let xs: f64 = x - short_mean
         let j: i32 = i * s[0].outputs
         let dw0: f64 = av0 * d0 * xl - au0 * dt0 * xs
         s[0].delta[j] = dw0
