@@ -260,11 +260,15 @@ export function sfa_f(s: ptr<SfaState>) -> f64 {
 # This order exactly follows OscillateFeedForward{Tuple}: smooth input,
 # estimate variance from previous y, read new y, smooth y, form deltas.
 export function sfa_step(s: ptr<SfaState>, time: i32, adapt: bool) -> void {
+    let mut active: i32 = -1
     if s[0].outputs == 1 {
-        sfa_hot(s, signal_one(s[0].ro, time), 1)
+        let position: i32 = signal_one(s[0].ro, time)
+        sfa_hot(s, position, 1)
+        active = position - 1
     } else {
         let pair: SignalPair = signal_two(s[0].ro, time)
         sfa_hot(s, pair.first, pair.second)
+        active = (pair.second - 1) * s[0].width + pair.first - 1
     }
 
     let gl: f64 = s[0].gamma_long
@@ -287,12 +291,15 @@ export function sfa_step(s: ptr<SfaState>, time: i32, adapt: bool) -> void {
         s[0].u1 = gl * s[0].u1 + (1.0 - gl) * old_short1 * old_short1
     }
 
+    # The oscillating input is exactly one-hot: the linear projection is
+    # one indexed weight per output, not a sum across 101/2601 zeros.
+    # Input smoothing and gradients still update all coordinates.
     let mut raw0: f64 = 0.0
     let mut raw1: f64 = 0.0
-    for i in 0 to s[0].inputs {
-        raw0 = raw0 + s[0].input[i] * s[0].weights[i * s[0].outputs]
+    if active >= 0 and active < s[0].inputs {
+        raw0 = s[0].weights[active * s[0].outputs]
         if s[0].outputs == 2 {
-            raw1 = raw1 + s[0].input[i] * s[0].weights[i * 2 + 1]
+            raw1 = s[0].weights[active * 2 + 1]
         }
     }
     if s[0].outputs == 2 {
