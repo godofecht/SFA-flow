@@ -1,0 +1,347 @@
+# @module sfa.core
+# @means  Stone-Bray adaptive slow feature extraction in native Flow.
+# @from   https://github.com/godofecht/Slow-Feature-Analysis
+#
+# All learning, network, signal, and statistics algorithms are Flow code.
+# The C ABI is used only for allocation and standard libm functions.
+
+extern {
+    function calloc(count: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function sin(x: f64) -> f64
+    function pow(x: f64, y: f64) -> f64
+    function sqrt(x: f64) -> f64
+    function round(x: f64) -> f64
+    function log(x: f64) -> f64
+}
+
+export struct Correlation {
+    n: i32,
+    sx: f64,
+    sy: f64,
+    sxx: f64,
+    syy: f64,
+    sxy: f64
+}
+
+export function correlation_empty() -> Correlation {
+    return Correlation { n: 0, sx: 0.0, sy: 0.0, sxx: 0.0, syy: 0.0, sxy: 0.0 }
+}
+
+export function correlation_add(c: Correlation, x: f64, y: f64) -> Correlation {
+    return Correlation {
+        n: c.n + 1,
+        sx: c.sx + x,
+        sy: c.sy + y,
+        sxx: c.sxx + x * x,
+        syy: c.syy + y * y,
+        sxy: c.sxy + x * y
+    }
+}
+
+function correlation_remove(c: Correlation, x: f64, y: f64) -> Correlation {
+    return Correlation {
+        n: c.n - 1,
+        sx: c.sx - x,
+        sy: c.sy - y,
+        sxx: c.sxx - x * x,
+        syy: c.syy - y * y,
+        sxy: c.sxy - x * y
+    }
+}
+
+export function correlation_value(c: Correlation) -> f64 {
+    if c.n < 2 {
+        return 0.0
+    }
+    let n: f64 = c.n as f64
+    let vx: f64 = n * c.sxx - c.sx * c.sx
+    let vy: f64 = n * c.syy - c.sy * c.sy
+    if vx <= 0.0 or vy <= 0.0 {
+        return 0.0
+    }
+    return (n * c.sxy - c.sx * c.sy) / sqrt(vx * vy)
+}
+
+struct CorrelationWindow {
+    xs: ptr<f64>,
+    ys: ptr<f64>,
+    capacity: i32,
+    next: i32,
+    stats: Correlation
+}
+
+function window_new(capacity: i32) -> CorrelationWindow {
+    let c: i32 = if capacity < 2 { 2 } else { capacity }
+    return CorrelationWindow {
+        xs: calloc(c as i64, 8) as ptr<f64>,
+        ys: calloc(c as i64, 8) as ptr<f64>,
+        capacity: c,
+        next: 0,
+        stats: correlation_empty()
+    }
+}
+
+function window_add(w: CorrelationWindow, x: f64, y: f64) -> CorrelationWindow {
+    let mut stats: Correlation = w.stats
+    if stats.n == w.capacity {
+        stats = correlation_remove(stats, w.xs[w.next], w.ys[w.next])
+    }
+    w.xs[w.next] = x
+    w.ys[w.next] = y
+    stats = correlation_add(stats, x, y)
+    let next: i32 = (w.next + 1) % w.capacity
+    return CorrelationWindow {
+        xs: w.xs, ys: w.ys, capacity: w.capacity,
+        next: next, stats: stats
+    }
+}
+
+export struct SignalPair {
+    first: i32,
+    second: i32
+}
+
+export function signal_one(ro: f64, time: i32) -> i32 {
+    let phase: f64 = 3.14159265358979323846 / 180.0 * (time as f64) * 360.0 / ro
+    return round(51.0 + 50.0 * sin(phase)) as i32
+}
+
+export function signal_two(ro: f64, time: i32) -> SignalPair {
+    let phase: f64 = 3.14159265358979323846 / 180.0 * (time as f64) * 360.0 / ro
+    let phi: f32 = (3.14159265358979323846 / 180.0 * (time as f64) * 17.0 / 360.0) as f32
+    let p: f64 = phi as f64
+    return SignalPair {
+        first: round(26.0 + 25.0 * sin(phase + p)) as i32,
+        second: round(26.0 + 25.0 * sin(phase - p)) as i32
+    }
+}
+
+export struct SfaState {
+    ro: f64,
+    inputs: i32,
+    outputs: i32,
+    width: i32,
+    gamma_long: f64,
+    gamma_short: f64,
+    weights: ptr<f64>,
+    delta: ptr<f64>,
+    input: ptr<f64>,
+    xbar: ptr<f64>,
+    xtilde: ptr<f64>,
+    y0: f64,
+    y1: f64,
+    ybar0: f64,
+    ybar1: f64,
+    ytilde0: f64,
+    ytilde1: f64,
+    u0: f64,
+    u1: f64,
+    v0: f64,
+    v1: f64,
+    anti: CorrelationWindow,
+    rng: i64
+}
+
+# Park-Miller generator: reproducible on both platforms without C rand() state.
+function rng_step(state: i64) -> i64 {
+    return (state * 48271) % 2147483647
+}
+
+export function sfa_new(ro: f64, invariances: i32, seed: i64) -> SfaState {
+    let inputs: i32 = if invariances == 2 { 2601 } else { 101 }
+    let outputs: i32 = if invariances == 2 { 2 } else { 1 }
+    let width: i32 = if invariances == 2 { 51 } else { 101 }
+    let mut rng: i64 = seed % 2147483647
+    if rng <= 0 {
+        rng = 1
+    }
+
+    let weights: ptr<f64> = calloc((inputs * outputs) as i64, 8) as ptr<f64>
+    let delta: ptr<f64> = calloc((inputs * outputs) as i64, 8) as ptr<f64>
+    let input: ptr<f64> = calloc(inputs as i64, 8) as ptr<f64>
+    let xbar: ptr<f64> = calloc(inputs as i64, 8) as ptr<f64>
+    let xtilde: ptr<f64> = calloc(inputs as i64, 8) as ptr<f64>
+    let cap: i32 = (20.0 * ro) as i32
+    let anti: CorrelationWindow = window_new(cap)
+
+    let mut s: SfaState = SfaState {
+        ro: ro,
+        inputs: inputs,
+        outputs: outputs,
+        width: width,
+        gamma_long: pow(0.5, 1.0 / (2.0 * ro)),
+        gamma_short: pow(0.5, 31.0 / ro),
+        weights: weights,
+        delta: delta,
+        input: input,
+        xbar: xbar,
+        xtilde: xtilde,
+        y0: 0.0, y1: 0.0,
+        ybar0: 0.0, ybar1: 0.0,
+        ytilde0: 0.0, ytilde1: 0.0,
+        u0: 0.0, u1: 0.0,
+        v0: 0.0, v1: 0.0,
+        anti: anti,
+        rng: rng
+    }
+    if !sfa_valid(&s) {
+        return s
+    }
+
+    for i in 0 to inputs * outputs {
+        rng = rng_step(rng)
+        s.weights[i] = (rng as f64) * (2.0 / 2147483647.0) - 1.0
+    }
+    s.rng = rng
+    sfa_normalize(&s)
+    return s
+}
+
+export function sfa_valid(s: ptr<SfaState>) -> bool {
+    return s[0].weights != null and s[0].delta != null and
+        s[0].input != null and s[0].xbar != null and s[0].xtilde != null and
+        s[0].anti.xs != null and s[0].anti.ys != null
+}
+
+# Preserve original Network::NormalizeWeights: "average" is sum/101 even
+# for 2601 inputs. The original sum-of-squares name held the raw sum.
+export function sfa_normalize(s: ptr<SfaState>) -> void {
+    for o in 0 to s[0].outputs {
+        let mut sum: f64 = 0.0
+        for i in 0 to s[0].inputs {
+            sum = sum + s[0].weights[i * s[0].outputs + o]
+        }
+        let average: f64 = sum / 101.0
+        let mut squared: f64 = 0.0
+        for i in 0 to s[0].inputs {
+            let idx: i32 = i * s[0].outputs + o
+            let w: f64 = s[0].weights[idx] - average
+            s[0].weights[idx] = w
+            squared = squared + w * w
+        }
+        if squared > 0.0 {
+            let scale: f64 = 1.0 / sqrt(squared)
+            for i in 0 to s[0].inputs {
+                let idx: i32 = i * s[0].outputs + o
+                s[0].weights[idx] = s[0].weights[idx] * scale
+            }
+        }
+    }
+}
+
+export function sfa_reset_training_history(s: ptr<SfaState>) -> void {
+    s[0].anti.next = 0
+    s[0].anti.stats = correlation_empty()
+}
+
+export function sfa_hot(s: ptr<SfaState>, a: i32, b: i32) -> void {
+    for i in 0 to s[0].inputs {
+        s[0].input[i] = 0.0
+    }
+    if a < 1 or a > s[0].width {
+        return
+    }
+    if b < 1 or b > (s[0].inputs / s[0].width) {
+        return
+    }
+    s[0].input[(b - 1) * s[0].width + (a - 1)] = 1.0
+}
+
+# Safe ratio: the legacy program wrote nan at zero-variance startup.
+# We export 0 until both estimates are positive; no NaNs enter CSV.
+export function sfa_f(s: ptr<SfaState>) -> f64 {
+    if s[0].u0 <= 0.0 or s[0].v0 <= 0.0 {
+        return 0.0
+    }
+    return log(s[0].v0 / s[0].u0)
+}
+
+# This order exactly follows OscillateFeedForward{Tuple}: smooth input,
+# estimate variance from previous y, read new y, smooth y, form deltas.
+export function sfa_step(s: ptr<SfaState>, time: i32, adapt: bool) -> void {
+    if s[0].outputs == 1 {
+        sfa_hot(s, signal_one(s[0].ro, time), 1)
+    } else {
+        let pair: SignalPair = signal_two(s[0].ro, time)
+        sfa_hot(s, pair.first, pair.second)
+    }
+
+    let gl: f64 = s[0].gamma_long
+    let gs: f64 = s[0].gamma_short
+    for i in 0 to s[0].inputs {
+        let x: f64 = s[0].input[i]
+        s[0].xbar[i] = gl * s[0].xbar[i] + (1.0 - gl) * x
+        s[0].xtilde[i] = gs * s[0].xtilde[i] + (1.0 - gs) * x
+    }
+
+    let old_long0: f64 = s[0].y0 - s[0].ybar0
+    let old_short0: f64 = s[0].y0 - s[0].ytilde0
+    s[0].v0 = gl * s[0].v0 + (1.0 - gl) * old_long0 * old_long0
+    s[0].u0 = gl * s[0].u0 + (1.0 - gl) * old_short0 * old_short0
+
+    if s[0].outputs == 2 {
+        let old_long1: f64 = s[0].y1 - s[0].ybar1
+        let old_short1: f64 = s[0].y1 - s[0].ytilde1
+        s[0].v1 = gl * s[0].v1 + (1.0 - gl) * old_long1 * old_long1
+        s[0].u1 = gl * s[0].u1 + (1.0 - gl) * old_short1 * old_short1
+    }
+
+    let mut raw0: f64 = 0.0
+    let mut raw1: f64 = 0.0
+    for i in 0 to s[0].inputs {
+        raw0 = raw0 + s[0].input[i] * s[0].weights[i * s[0].outputs]
+        if s[0].outputs == 2 {
+            raw1 = raw1 + s[0].input[i] * s[0].weights[i * 2 + 1]
+        }
+    }
+    if s[0].outputs == 2 {
+        raw1 = raw1 - 10.0 * correlation_value(s[0].anti.stats) * raw0
+    }
+    s[0].y0 = raw0
+    s[0].ybar0 = gl * s[0].ybar0 + (1.0 - gl) * raw0
+    s[0].ytilde0 = gs * s[0].ytilde0 + (1.0 - gs) * raw0
+    if s[0].outputs == 2 {
+        s[0].y1 = raw1
+        s[0].ybar1 = gl * s[0].ybar1 + (1.0 - gl) * raw1
+        s[0].ytilde1 = gs * s[0].ytilde1 + (1.0 - gs) * raw1
+        s[0].anti = window_add(s[0].anti, raw0, raw1)
+    }
+
+    if !adapt {
+        return
+    }
+    let alpha: f64 = 0.001
+    let av0: f64 = if s[0].v0 > 0.0 { alpha / s[0].v0 } else { 0.0 }
+    let au0: f64 = if s[0].u0 > 0.0 { alpha / s[0].u0 } else { 0.0 }
+    let d0: f64 = s[0].y0 - s[0].ybar0
+    let dt0: f64 = s[0].y0 - s[0].ytilde0
+    let av1: f64 = if s[0].v1 > 0.0 { alpha / s[0].v1 } else { 0.0 }
+    let au1: f64 = if s[0].u1 > 0.0 { alpha / s[0].u1 } else { 0.0 }
+    let d1: f64 = s[0].y1 - s[0].ybar1
+    let dt1: f64 = s[0].y1 - s[0].ytilde1
+
+    for i in 0 to s[0].inputs {
+        let xl: f64 = s[0].input[i] - s[0].xbar[i]
+        let xs: f64 = s[0].input[i] - s[0].xtilde[i]
+        let j: i32 = i * s[0].outputs
+        let dw0: f64 = av0 * d0 * xl - au0 * dt0 * xs
+        s[0].delta[j] = dw0
+        s[0].weights[j] = s[0].weights[j] + dw0
+        if s[0].outputs == 2 {
+            let dw1: f64 = av1 * d1 * xl - au1 * dt1 * xs
+            s[0].delta[j + 1] = dw1
+            s[0].weights[j + 1] = s[0].weights[j + 1] + dw1
+        }
+    }
+}
+
+export function sfa_free(s: ptr<SfaState>) -> void {
+    free(s[0].weights as ptr<void>)
+    free(s[0].delta as ptr<void>)
+    free(s[0].input as ptr<void>)
+    free(s[0].xbar as ptr<void>)
+    free(s[0].xtilde as ptr<void>)
+    free(s[0].anti.xs as ptr<void>)
+    free(s[0].anti.ys as ptr<void>)
+}
