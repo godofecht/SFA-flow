@@ -46,10 +46,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang make libomp-dev
 
-      - name: Validate exporter tests and JavaScript syntax
+      - name: Install browser WebAssembly toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq emscripten
+
+      - name: Validate exporter and browser JavaScript
         run: |
           python3 -m unittest discover -s site/tests -v
           node --check site/app.js
+          node --check site/live.js
 
       - name: Run native Flow numerical regression suites
         env:
@@ -57,6 +63,7 @@ jobs:
         run: |
           ./.flow-toolchain/flow run tests/smoke.flow
           ./.flow-toolchain/flow run tests/network_stats.flow
+          ./.flow-toolchain/flow run tests/browser.flow
 
       - name: Generate one-invariance experiment
         env:
@@ -76,10 +83,26 @@ jobs:
         run: |
           ./.flow-toolchain/flow run src/main.flow
 
+      - name: Compile actual Flow solver to browser WebAssembly
+        run: |
+          ./.flow-toolchain/flow wasm src/browser.flow \
+            --out build/sfa-live-wasm \
+            --name sfa_engine \
+            --emcc-flag=-sENVIRONMENT=web,node \
+            --emcc-flag=-sEXPORTED_RUNTIME_METHODS=ccall \
+            --emcc-flag=-sEXPORTED_FUNCTIONS=_main,_malloc,_free,_sfa_web_create,_sfa_web_destroy,_sfa_web_step,_sfa_web_reset_history,_sfa_web_y0,_sfa_web_y1,_sfa_web_objective,_sfa_web_input_a,_sfa_web_input_b,_sfa_web_weight,_sfa_web_input_count,_sfa_web_output_count
+          test -s build/sfa-live-wasm/sfa_engine.wasm
+          test -s build/sfa-live-wasm/sfa_engine.js
+
+      - name: Execute both Flow SFA models inside WebAssembly
+        run: node site/tests/live_wasm.cjs
+
       - name: Package scientific traces and static site
         run: |
           mkdir -p _site/data
-          cp site/index.html site/styles.css site/app.js _site/
+          cp site/index.html site/styles.css site/app.js site/live.js _site/
+          mkdir -p _site/wasm
+          cp build/sfa-live-wasm/sfa_engine.js build/sfa-live-wasm/sfa_engine.wasm _site/wasm/
           python3 site/build_results.py --data-dir data --output _site/data/results.json --one-rate 5 --two-rate 2 --seed 12345
           touch _site/.nojekyll
           test -s _site/data/results.json
