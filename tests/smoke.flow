@@ -1,0 +1,112 @@
+# Exit-zero executable regression tests for the native Flow SFA port.
+# These use the actual exported solver functions, not mock implementations.
+
+import sfa.core {
+    SfaState, Correlation, SignalPair,
+    correlation_empty, correlation_add, correlation_value,
+    sfa_new, sfa_valid, sfa_free, sfa_hot, sfa_step, sfa_f,
+    signal_one, signal_two, sfa_reset_training_history
+}
+
+extern {
+    function fabs(x: f64) -> f64
+    function sqrt(x: f64) -> f64
+}
+
+function near(a: f64, b: f64, tol: f64) -> bool {
+    return fabs(a - b) <= tol
+}
+
+function check_normalized(s: ptr<SfaState>) -> bool {
+    for o in 0 to s[0].outputs {
+        let mut ss: f64 = 0.0
+        for i in 0 to s[0].inputs {
+            let x: f64 = s[0].weights[i * s[0].outputs + o]
+            ss = ss + x * x
+        }
+        if !near(ss, 1.0, 0.00000001) {
+            return false
+        }
+    }
+    return true
+}
+
+function main() -> i32 {
+    let mut corr: Correlation = correlation_empty()
+    corr = correlation_add(corr, 1.0, 2.0)
+    corr = correlation_add(corr, 2.0, 4.0)
+    corr = correlation_add(corr, 3.0, 6.0)
+    corr = correlation_add(corr, 4.0, 8.0)
+    if !near(correlation_value(corr), 1.0, 0.00000001) {
+        return 1
+    }
+    let mut inverse: Correlation = correlation_empty()
+    inverse = correlation_add(inverse, 1.0, 4.0)
+    inverse = correlation_add(inverse, 2.0, 3.0)
+    inverse = correlation_add(inverse, 3.0, 2.0)
+    inverse = correlation_add(inverse, 4.0, 1.0)
+    if !near(correlation_value(inverse), -1.0, 0.00000001) {
+        return 2
+    }
+    if correlation_value(correlation_empty()) != 0.0 {
+        return 3
+    }
+    if signal_one(50.0, 0) != 51 or signal_one(50.0, 50) != 51 {
+        return 4
+    }
+    let pair: SignalPair = signal_two(450.0, 0)
+    if pair.first != 26 or pair.second != 26 {
+        return 5
+    }
+
+    let mut one: SfaState = sfa_new(50.0, 1, 12345)
+    let mut one_copy: SfaState = sfa_new(50.0, 1, 12345)
+    if !sfa_valid(&one) or !sfa_valid(&one_copy) {
+        return 6
+    }
+    if !check_normalized(&one) or !check_normalized(&one_copy) {
+        return 7
+    }
+    for i in 0 to one.inputs {
+        if one.weights[i] != one_copy.weights[i] {
+            return 8
+        }
+    }
+    if sfa_f(&one) != 0.0 {
+        return 9
+    }
+    sfa_step(&one, 0, false)
+    if !near(one.y0, one.weights[50], 0.000000000001) {
+        return 10
+    }
+    for t in 1 to 150 {
+        sfa_step(&one, t, t >= 25)
+    }
+    if one.y0 != one.y0 or one.u0 != one.u0 or one.v0 != one.v0 {
+        return 11
+    }
+    sfa_free(&one)
+    sfa_free(&one_copy)
+
+    let mut two: SfaState = sfa_new(50.0, 2, 12345)
+    if !sfa_valid(&two) or !check_normalized(&two) {
+        return 12
+    }
+    sfa_hot(&two, 2, 3)
+    if two.input[103] != 1.0 or two.input[104] != 0.0 {
+        return 13
+    }
+    for t in 0 to 100 {
+        sfa_step(&two, t, t >= 20)
+    }
+    if two.y0 != two.y0 or two.y1 != two.y1 {
+        return 14
+    }
+    sfa_reset_training_history(&two)
+    if two.anti.stats.n != 0 {
+        return 15
+    }
+    sfa_free(&two)
+    print("SFA Flow smoke tests passed")
+    return 0
+}
