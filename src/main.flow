@@ -1,0 +1,210 @@
+# Native Flow command-line driver for the original 1D/2D SFA experiments.
+# Run from the repository root so data/ is the output directory.
+
+import sfa.core {
+    SfaState, Correlation, SignalPair,
+    sfa_new, sfa_valid, sfa_step, sfa_free, sfa_f,
+    sfa_reset_training_history, signal_one, signal_two,
+    correlation_empty, correlation_add, correlation_value
+}
+
+extern {
+    function calloc(count: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function getenv(name: string) -> ptr<u8>
+    function atof(text: string) -> f64
+    function atoi(text: string) -> i32
+    function strcmp(a: string, b: string) -> i32
+    function fopen(path: string, mode: string) -> ptr<void>
+    function fclose(file: ptr<void>) -> i32
+    function fputs(text: string, file: ptr<void>) -> i32
+    function fprintf(file: ptr<void>, fmt: string, value: f64) -> i32
+    function snprintf(buf: ptr<u8>, n: i64, fmt: string, rate: f64, suffix: string) -> i32
+}
+
+function close_csv(file: ptr<void>) -> void {
+    if file != null {
+        let _c: i32 = fclose(file)
+    }
+}
+
+function write_value(file: ptr<void>, value: f64) -> void {
+    let _w: i32 = fprintf(file, "%.17g\n", value)
+}
+
+function open_csv(path: string, heading: string) -> ptr<void> {
+    let fp: ptr<void> = fopen(path, "w")
+    if fp != null {
+        let _h: i32 = fputs(heading, fp)
+    }
+    return fp
+}
+
+function open_rate_csv(rate: f64, suffix: string) -> ptr<void> {
+    let path: ptr<u8> = calloc(128, 1) as ptr<u8>
+    if path == null {
+        return null
+    }
+    let _n: i32 = snprintf(path, 128, "data/%.6f %s.csv", rate, suffix)
+    let fp: ptr<void> = open_csv(path as string, "Values\n")
+    free(path as ptr<void>)
+    return fp
+}
+
+# Original C++ uses 4*ro burn-in and 50*ro adaptive samples.
+# Correlation is updated online rather than scanning the entire history at
+# each timestep. This is algebraically equivalent, within FP rounding.
+function train_one(ro: f64, seed: i64) -> i32 {
+    let mut model: SfaState = sfa_new(ro, 1, seed)
+    if !sfa_valid(&model) {
+        sfa_free(&model)
+        return 10
+    }
+    let f: ptr<void> = open_rate_csv(ro, "F")
+    let values: ptr<void> = open_rate_csv(ro, "values")
+    let correlations: ptr<void> = open_rate_csv(ro, "Cor")
+    if f == null or values == null or correlations == null {
+        close_csv(f)
+        close_csv(values)
+        close_csv(correlations)
+        sfa_free(&model)
+        return 11
+    }
+
+    let burn: i32 = (4.0 * ro) as i32
+    let end: i32 = burn + (50.0 * ro) as i32
+    for t in 0 to burn {
+        sfa_step(&model, t, false)
+        write_value(f, sfa_f(&model))
+    }
+
+    let mut running: Correlation = correlation_empty()
+    for t in burn to end {
+        sfa_step(&model, t, true)
+        running = correlation_add(running, signal_one(ro, t) as f64, model.y0)
+        write_value(values, model.y0)
+        write_value(f, sfa_f(&model))
+        write_value(correlations, correlation_value(running))
+    }
+
+    close_csv(f)
+    close_csv(values)
+    close_csv(correlations)
+    sfa_free(&model)
+    return 0
+}
+
+# Two-invariance experiment uses original paired phase-modulated signal,
+# anti-Hebbian suppression, and 51x51 one-hot input. Unlike the C++ source,
+# cor1/cor2 now contain actual streaming signal/output correlations.
+function train_two(ro: f64, seed: i64) -> i32 {
+    let mut model: SfaState = sfa_new(ro, 2, seed)
+    if !sfa_valid(&model) {
+        sfa_free(&model)
+        return 20
+    }
+
+    let out1: ptr<void> = open_csv("data/output1.csv", "Values\n")
+    let out2: ptr<void> = open_csv("data/output2.csv", "Values\n")
+    let sig1: ptr<void> = open_csv("data/signal1.csv", "Values\n")
+    let sig2: ptr<void> = open_csv("data/signal2.csv", "Values\n")
+    let cor1: ptr<void> = open_csv("data/cor1.csv", "Values\n")
+    let cor2: ptr<void> = open_csv("data/cor2.csv", "Values\n")
+    let weights: ptr<void> = open_csv("data/weight_vector.csv", "j\n")
+
+    if out1 == null or out2 == null or sig1 == null or sig2 == null or
+       cor1 == null or cor2 == null or weights == null {
+        close_csv(out1)
+        close_csv(out2)
+        close_csv(sig1)
+        close_csv(sig2)
+        close_csv(cor1)
+        close_csv(cor2)
+        close_csv(weights)
+        sfa_free(&model)
+        return 21
+    }
+
+    let burn: i32 = (4.0 * ro) as i32
+    let end: i32 = burn + (50.0 * ro) as i32
+    for t in 0 to burn {
+        sfa_step(&model, t, false)
+    }
+    sfa_reset_training_history(&model)
+
+    let mut c1: Correlation = correlation_empty()
+    let mut c2: Correlation = correlation_empty()
+    for t in burn to end {
+        sfa_step(&model, t, true)
+        let pair: SignalPair = signal_two(ro, t)
+        c1 = correlation_add(c1, pair.first as f64, model.y0)
+        c2 = correlation_add(c2, pair.second as f64, model.y1)
+        write_value(out1, model.y0)
+        write_value(out2, model.y1)
+        write_value(sig1, pair.first as f64)
+        write_value(sig2, pair.second as f64)
+        write_value(cor1, correlation_value(c1))
+        write_value(cor2, correlation_value(c2))
+    }
+
+    for i in 0 to model.inputs * model.outputs {
+        write_value(weights, model.weights[i])
+    }
+    close_csv(out1)
+    close_csv(out2)
+    close_csv(sig1)
+    close_csv(sig2)
+    close_csv(cor1)
+    close_csv(cor2)
+    close_csv(weights)
+    sfa_free(&model)
+    return 0
+}
+
+function read_seed() -> i64 {
+    let ptr: ptr<u8> = getenv("SFA_SEED")
+    if ptr != null {
+        return atoi(ptr as string) as i64
+    }
+    return 1
+}
+
+function read_rate() -> f64 {
+    let ptr: ptr<u8> = getenv("SFA_RATE")
+    if ptr != null {
+        return atof(ptr as string)
+    }
+    return 0.0
+}
+
+function two_invariances() -> bool {
+    let ptr: ptr<u8> = getenv("SFA_MODE")
+    if ptr == null {
+        return false
+    }
+    return strcmp(ptr as string, "2") == 0 or strcmp(ptr as string, "two") == 0
+}
+
+function main() -> i32 {
+    let seed: i64 = read_seed()
+    let rate: f64 = read_rate()
+    if rate < 0.0 {
+        print("SFA_RATE must be positive")
+        return 2
+    }
+    if two_invariances() {
+        let r: f64 = if rate > 0.0 { rate } else { 450.0 }
+        return train_two(r, seed)
+    }
+    if rate > 0.0 {
+        return train_one(rate, seed)
+    }
+    let rates: array<f64, 7> = [50.0, 100.0, 200.0, 450.0, 900.0, 1800.0, 3600.0]
+    for i in 0 to 7 {
+        let rc: i32 = train_one(rates[i], seed)
+        if rc != 0 {
+            return rc
+        }
+    }
+    return 0
+}
