@@ -1,0 +1,224 @@
+# Differential numerical oracle for the Flow SFA model.
+#
+# The reference derives the next state from a snapshot of the previous state,
+# reproduces the equations separately, and compares ALL weights and running
+# moments at every step. Pearson is recomputed from raw output history, not
+# from the optimized online correlation accumulator or its ring buffer.
+
+import sfa.core {
+    SfaState, SignalPair, sfa_new, sfa_valid, sfa_free, sfa_step,
+    sfa_reset_training_history, signal_one, signal_two
+}
+
+extern {
+    function calloc(count: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function fabs(x: f64) -> f64
+    function sqrt(x: f64) -> f64
+}
+
+function close(a: f64, b: f64) -> bool {
+    if a != a or b != b {
+        return false
+    }
+    return fabs(a - b) <= 0.00000001 * (1.0 + fabs(a) + fabs(b))
+}
+
+# Independent O(window_size) Pearson oracle. The optimized code under test
+# instead uses add/remove of moments and a circular history buffer.
+function reference_pearson(xs: ptr<f64>, ys: ptr<f64>, n: i32, cap: i32) -> f64 {
+    let mut begin: i32 = 0
+    if n > cap {
+        begin = n - cap
+    }
+    let count: i32 = n - begin
+    if count < 2 {
+        return 0.0
+    }
+    let mut sx: f64 = 0.0
+    let mut sy: f64 = 0.0
+    let mut sxx: f64 = 0.0
+    let mut syy: f64 = 0.0
+    let mut sxy: f64 = 0.0
+    for i in begin to n {
+        let x: f64 = xs[i]
+        let y: f64 = ys[i]
+        sx = sx + x
+        sy = sy + y
+        sxx = sxx + x * x
+        syy = syy + y * y
+        sxy = sxy + x * y
+    }
+    let countf: f64 = count as f64
+    let dx: f64 = countf * sxx - sx * sx
+    let dy: f64 = countf * syy - sy * sy
+    if dx <= 0.0 or dy <= 0.0 {
+        return 0.0
+    }
+    return (countf * sxy - sx * sy) / sqrt(dx * dy)
+}
+
+function verify(rate: f64, mode: i32, seed: i64, warm: i32, steps: i32) -> i32 {
+    let mut s: SfaState = sfa_new(rate, mode, seed)
+    if !sfa_valid(&s) {
+        return 1
+    }
+    let n: i32 = s.inputs
+    let out: i32 = s.outputs
+    let old_weights: ptr<f64> = calloc((n * out) as i64, 8) as ptr<f64>
+    let old_xbar: ptr<f64> = calloc(n as i64, 8) as ptr<f64>
+    let old_xtilde: ptr<f64> = calloc(n as i64, 8) as ptr<f64>
+    let hist0: ptr<f64> = calloc((warm + steps) as i64, 8) as ptr<f64>
+    let hist1: ptr<f64> = calloc((warm + steps) as i64, 8) as ptr<f64>
+    if old_weights == null or old_xbar == null or old_xtilde == null or
+       hist0 == null or hist1 == null {
+        return 2
+    }
+
+    let gl: f64 = s.gamma_long
+    let gs: f64 = s.gamma_short
+    let cap: i32 = if (20.0 * rate) as i32 > 2 { (20.0 * rate) as i32 } else { 2 }
+    let mut history: i32 = 0
+    for t in 0 to warm + steps {
+        if t == warm {
+            sfa_reset_training_history(&s)
+            history = 0
+        }
+
+        for i in 0 to n {
+            old_xbar[i] = s.xbar[i]
+            old_xtilde[i] = s.xtilde[i]
+        }
+        for j in 0 to n * out {
+            old_weights[j] = s.weights[j]
+        }
+
+        let last_y0: f64 = s.y0
+        let last_y1: f64 = s.y1
+        let last_bar0: f64 = s.ybar0
+        let last_bar1: f64 = s.ybar1
+        let last_tilde0: f64 = s.ytilde0
+        let last_tilde1: f64 = s.ytilde1
+        let last_v0: f64 = s.v0
+        let last_v1: f64 = s.v1
+        let last_u0: f64 = s.u0
+        let last_u1: f64 = s.u1
+
+        let active: i32 = if mode == 1 {
+            signal_one(rate, t) - 1
+        } else {
+            let pair: SignalPair = signal_two(rate, t)
+            (pair.second - 1) * 51 + pair.first - 1
+        }
+        if active < 0 or active >= n {
+            return 3
+        }
+        let anti: f64 = if mode == 2 {
+            reference_pearson(hist0, hist1, history, cap)
+        } else { 0.0 }
+        let expected_y0: f64 = old_weights[active * out]
+        let expected_y1: f64 = if mode == 2 {
+            old_weights[active * 2 + 1] - 10.0 * anti * expected_y0
+        } else { 0.0 }
+
+        let diff_l0: f64 = last_y0 - last_bar0
+        let diff_s0: f64 = last_y0 - last_tilde0
+        let new_v0: f64 = gl * last_v0 + (1.0 - gl) * diff_l0 * diff_l0
+        let new_u0: f64 = gl * last_u0 + (1.0 - gl) * diff_s0 * diff_s0
+        let new_bar0: f64 = gl * last_bar0 + (1.0 - gl) * expected_y0
+        let new_tilde0: f64 = gs * last_tilde0 + (1.0 - gs) * expected_y0
+
+        let diff_l1: f64 = last_y1 - last_bar1
+        let diff_s1: f64 = last_y1 - last_tilde1
+        let new_v1: f64 = gl * last_v1 + (1.0 - gl) * diff_l1 * diff_l1
+        let new_u1: f64 = gl * last_u1 + (1.0 - gl) * diff_s1 * diff_s1
+        let new_bar1: f64 = gl * last_bar1 + (1.0 - gl) * expected_y1
+        let new_tilde1: f64 = gs * last_tilde1 + (1.0 - gs) * expected_y1
+
+        let adapt: bool = t >= warm
+        sfa_step(&s, t, adapt)
+        if !close(s.y0, expected_y0) or !close(s.v0, new_v0) or
+           !close(s.u0, new_u0) or !close(s.ybar0, new_bar0) or
+           !close(s.ytilde0, new_tilde0) {
+            return 4
+        }
+        if mode == 2 {
+            if !close(s.y1, expected_y1) or !close(s.v1, new_v1) or
+               !close(s.u1, new_u1) or !close(s.ybar1, new_bar1) or
+               !close(s.ytilde1, new_tilde1) {
+                return 5
+            }
+            let size: i32 = if history + 1 > cap { cap } else { history + 1 }
+            if s.anti.stats.n != size {
+                return 6
+            }
+            hist0[history] = expected_y0
+            hist1[history] = expected_y1
+            history = history + 1
+        }
+
+        let av0: f64 = if new_v0 > 0.0 { 0.001 / new_v0 } else { 0.0 }
+        let au0: f64 = if new_u0 > 0.0 { 0.001 / new_u0 } else { 0.0 }
+        let av1: f64 = if new_v1 > 0.0 { 0.001 / new_v1 } else { 0.0 }
+        let au1: f64 = if new_u1 > 0.0 { 0.001 / new_u1 } else { 0.0 }
+        for i in 0 to n {
+            let x: f64 = if i == active { 1.0 } else { 0.0 }
+            let xl: f64 = gl * old_xbar[i] + (1.0 - gl) * x
+            let xs: f64 = gs * old_xtilde[i] + (1.0 - gs) * x
+            if !close(s.input[i], x) or !close(s.xbar[i], xl) or
+               !close(s.xtilde[i], xs) {
+                return 7
+            }
+            let dw0: f64 = av0 * (expected_y0 - new_bar0) * (x - xl) -
+                au0 * (expected_y0 - new_tilde0) * (x - xs)
+            let j: i32 = i * out
+            let next0: f64 = if adapt { old_weights[j] + dw0 } else { old_weights[j] }
+            if !close(s.weights[j], next0) {
+                return 8
+            }
+            if adapt and !close(s.delta[j], dw0) {
+                return 9
+            }
+            if mode == 2 {
+                let dw1: f64 = av1 * (expected_y1 - new_bar1) * (x - xl) -
+                    au1 * (expected_y1 - new_tilde1) * (x - xs)
+                let next1: f64 = if adapt {
+                    old_weights[j + 1] + dw1
+                } else {
+                    old_weights[j + 1]
+                }
+                if !close(s.weights[j + 1], next1) {
+                    return 10
+                }
+                if adapt and !close(s.delta[j + 1], dw1) {
+                    return 11
+                }
+            }
+        }
+    }
+
+    free(old_weights as ptr<void>)
+    free(old_xbar as ptr<void>)
+    free(old_xtilde as ptr<void>)
+    free(hist0 as ptr<void>)
+    free(hist1 as ptr<void>)
+    sfa_free(&s)
+    return 0
+}
+
+function main() -> i32 {
+    # 1D: one complete period of burn-in and many adaptive updates.
+    let a: i32 = verify(50.0, 1, 12345, 200, 1300)
+    if a != 0 {
+        print("1D differential parity test failed")
+        return 10 + a
+    }
+    # 2D: exercises both output gradients and a FULL ring-buffer wrap.
+    let b: i32 = verify(20.0, 2, 98765, 80, 700)
+    if b != 0 {
+        print("2D differential parity test failed")
+        return 40 + b
+    }
+    print("SFA differential parity test passed")
+    return 0
+}
