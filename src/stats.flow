@@ -1,0 +1,68 @@
+# @module sfa.stats
+# @means  Flow rewrite of include/stats.h in Slow-Feature-Analysis.
+
+extern {
+    function sqrt(x: f64) -> f64
+}
+
+export function stats_sum(values: ptr<f64>, n: i32) -> f64 {
+    let mut out: f64 = 0.0
+    for i in 0 to n {
+        out = out + values[i]
+    }
+    return out
+}
+
+export function stats_mean(values: ptr<f64>, n: i32) -> f64 {
+    if n <= 0 {
+        return 0.0
+    }
+    return stats_sum(values, n) / (n as f64)
+}
+
+export function stats_sqsum(values: ptr<f64>, n: i32) -> f64 {
+    let mut out: f64 = 0.0
+    for i in 0 to n {
+        out = out + values[i] * values[i]
+    }
+    return out
+}
+
+export function stats_stdev(values: ptr<f64>, n: i32) -> f64 {
+    if n <= 0 {
+        return 0.0
+    }
+    let nf: f64 = n as f64
+    let mean: f64 = stats_sum(values, n) / nf
+    let variance: f64 = stats_sqsum(values, n) / nf - mean * mean
+    if variance <= 0.0 {
+        return 0.0
+    }
+    return sqrt(variance)
+}
+
+export function stats_pearson(x: ptr<f64>, y: ptr<f64>, n: i32) -> f64 {
+    if n <= 1 {
+        return 0.0
+    }
+    let mut sx: f64 = 0.0
+    let mut sy: f64 = 0.0
+    let mut sxx: f64 = 0.0
+    let mut syy: f64 = 0.0
+    let mut sxy: f64 = 0.0
+    for i in 0 to n {
+        let a: f64 = x[i]
+        let b: f64 = y[i]
+        sx = sx + a
+        sy = sy + b
+        sxx = sxx + a * a
+        syy = syy + b * b
+        sxy = sxy + a * b
+    }
+    let nf: f64 = n as f64
+    let denom: f64 = (nf * sxx - sx * sx) * (nf * syy - sy * sy)
+    if denom <= 0.0 {
+        return 0.0
+    }
+    return (nf * sxy - sx * sy) / sqrt(denom)
+}
