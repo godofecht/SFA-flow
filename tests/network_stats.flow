@@ -1,3 +1,4 @@
+import sfa.core { SfaState, sfa_new, sfa_valid, sfa_hot, sfa_step, sfa_free }
 import sfa.network {
     Network, network_new, network_valid, network_forward,
     network_result, network_set_delta, network_update, network_free
@@ -58,6 +59,28 @@ function main() -> i32 {
         return 10
     }
     network_free(&net)
+
+    # The generic network and SFA's optimized one-layer kernel must have
+    # identical initialized weights for the same seed and topology.
+    let mut simple_shape: array<i32, 2> = [101, 1]
+    let mut generic: Network = network_new(&simple_shape[0], 2, 98765)
+    let mut specialized: SfaState = sfa_new(50.0, 1, 98765)
+    if !network_valid(&generic) or !sfa_valid(&specialized) {
+        return 11
+    }
+    for j in 0 to 101 {
+        if !close(generic.weights[j], specialized.weights[j]) {
+            return 12
+        }
+    }
+    sfa_hot(&specialized, 51, 1)
+    network_forward(&generic, specialized.input)
+    sfa_step(&specialized, 0, false)
+    if !close(network_result(&generic, 0), specialized.y0) {
+        return 13
+    }
+    network_free(&generic)
+    sfa_free(&specialized)
     print("SFA Flow network and statistics tests passed")
     return 0
 }
