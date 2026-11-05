@@ -1,0 +1,93 @@
+# @module sfa.browser
+# @means Browser-facing ABI for the exact native Flow SFA solver.
+# All learning updates are delegated to sfa.core and remain in Flow.
+# Emscripten exposes these exported functions to the web UI.
+
+import sfa.core {
+    SfaState, SignalPair, sfa_new, sfa_valid, sfa_step, sfa_f, sfa_free,
+    signal_one, signal_two
+}
+
+extern {
+    function free(p: ptr<void>) -> void
+}
+
+# Returns a persistent, heap-allocated model. JavaScript receives an opaque
+# pointer and must call sfa_web_destroy. A dynamic Flow array supplies the
+# correct sizeof(SfaState) without hardcoded memory-layout assumptions.
+export function sfa_web_create(rate: f64, mode: i32, seed: i32) -> ptr<SfaState> {
+    if rate < 2.0 or rate > 3600.0 or (mode != 1 and mode != 2) {
+        return null
+    }
+    let mut states: array<SfaState> = array<SfaState>(1)
+    let state: ptr<SfaState> = &states[0]
+    state[0] = sfa_new(rate, mode, seed as i64)
+    if !sfa_valid(state) {
+        sfa_free(state)
+        free(state as ptr<void>)
+        return null
+    }
+    return state
+}
+
+export function sfa_web_destroy(state: ptr<SfaState>) -> void {
+    if state == null {
+        return
+    }
+    sfa_free(state)
+    free(state as ptr<void>)
+}
+
+# A single learning step. No emulation or replay is performed by the host.
+export function sfa_web_step(state: ptr<SfaState>, time: i32, adapt: i32) -> void {
+    if state != null and time >= 0 {
+        sfa_step(state, time, adapt != 0)
+    }
+}
+
+export function sfa_web_y0(state: ptr<SfaState>) -> f64 {
+    return state[0].y0
+}
+
+export function sfa_web_y1(state: ptr<SfaState>) -> f64 {
+    return state[0].y1
+}
+
+export function sfa_web_objective(state: ptr<SfaState>) -> f64 {
+    return sfa_f(state)
+}
+
+export function sfa_web_input_a(state: ptr<SfaState>, time: i32) -> i32 {
+    if state[0].outputs == 1 {
+        return signal_one(state[0].ro, time)
+    }
+    let pair: SignalPair = signal_two(state[0].ro, time)
+    return pair.first
+}
+
+export function sfa_web_input_b(state: ptr<SfaState>, time: i32) -> i32 {
+    if state[0].outputs == 1 {
+        return 0
+    }
+    let pair: SignalPair = signal_two(state[0].ro, time)
+    return pair.second
+}
+
+export function sfa_web_weight(state: ptr<SfaState>, index: i32) -> f64 {
+    if state == null or index < 0 or index >= state[0].inputs * state[0].outputs {
+        return 0.0
+    }
+    return state[0].weights[index]
+}
+
+export function sfa_web_input_count(state: ptr<SfaState>) -> i32 {
+    return state[0].inputs
+}
+
+export function sfa_web_output_count(state: ptr<SfaState>) -> i32 {
+    return state[0].outputs
+}
+
+function main() -> i32 {
+    return 0
+}
