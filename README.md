@@ -2,7 +2,7 @@
 
 Native [Flow](https://github.com/flooooooooooow/flow) rewrite of the [original Stone–Bray SFA implementation](https://github.com/godofecht/Slow-Feature-Analysis). The learning algorithms, signal generators, statistics, and network logic are implemented in Flow, using only C-ABI platform allocation, math and file I/O primitives.
 
-**Status:** implementation committed on a feature branch; compiler execution and scientific equivalence are not yet independently validated.
+**Status:** native Flow solvers and browser WebAssembly have passing CI smoke tests. Differential equation-level checks and cross-backend trajectory comparisons are part of the scientific verification suite. The port does not yet claim matched-weight experimental equivalence with the historical C++ program.
 
 ## Run
 
@@ -11,6 +11,8 @@ Install the [Flow compiler](https://github.com/flooooooooooow/flow/blob/main/doc
 ~~~sh
 flow run tests/smoke.flow
 flow run tests/network_stats.flow
+flow run tests/parity.flow
+flow run tests/browser.flow
 flow run src/main.flow
 ~~~
 
@@ -46,10 +48,12 @@ The seeded Park–Miller PRNG replaces the original C-library rand, providing de
 
 The original code can generate undefined results from startup division by zero. This version writes zero for an unavailable initial log variance ratio and skips the corresponding zero-denominator gradient. The original two-output correlation vectors were never filled; this version populates them with signal/output correlations.
 
+The independent `tests/parity.flow` oracle recomputes the 1D and 2D update equations from state snapshots, checks every learned weight after each step, and compares the two-output sliding Pearson statistic against a direct-history reference across a full window wrap. The Pages CI additionally checks Flow→WASM results against native Flow CSV output at every timestep, including all 5,202 two-output final weights.
+
 The C++ Network backpropagation method has no implementation. The C++ OpenMP offload pragmas are execution hints, not additional SFA algorithms. Flow's port does not yet claim GPU offload or equivalent GPU performance.
 
 ## Verification
 
-GitHub Actions is configured to compile and execute both Flow regression programs and two short complete experiments, checking their CSV row counts. Passing these tests does not establish scientific trajectory parity: such a claim additionally requires matched initial weights, numerical tolerances, controlled compiler/rounding behavior and longer reference runs.
+GitHub Actions runs Flow smoke, network/statistics, differential-parity, and browser-ABI tests, then executes both full experiment paths. The Pages build additionally compiles Flow to WebAssembly and checks the native-versus-WASM outputs and final weights numerically. Passing these tests establishes equation-level internal consistency and cross-backend agreement; historical C++ experimental parity still requires matched initial weights, controlled compiler/rounding behavior and long-duration reference runs.
 
 The original copyright and MIT terms are retained in LICENSE.
