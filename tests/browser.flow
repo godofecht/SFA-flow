@@ -1,0 +1,38 @@
+# Confirm the browser-facing ABI invokes the native SFA implementation.
+import sfa.browser {
+    sfa_web_create, sfa_web_destroy, sfa_web_step, sfa_web_y0,
+    sfa_web_y1, sfa_web_objective, sfa_web_input_a,
+    sfa_web_input_b, sfa_web_weight, sfa_web_input_count,
+    sfa_web_output_count
+}
+
+function main() -> i32 {
+    let one = sfa_web_create(5.0, 1, 12345)
+    if one == null { return 1 }
+    if sfa_web_input_count(one) != 101 or sfa_web_output_count(one) != 1 {
+        return 2
+    }
+    if sfa_web_input_a(one, 0) != 51 {
+        return 3
+    }
+    for t in 0 to 40 {
+        sfa_web_step(one, t, if t >= 20 { 1 } else { 0 })
+        let y: f64 = sfa_web_y0(one)
+        if y != y { return 4 }
+    }
+    if sfa_web_objective(one) != sfa_web_objective(one) { return 5 }
+    sfa_web_destroy(one)
+
+    let two = sfa_web_create(2.0, 2, 12345)
+    if two == null { return 6 }
+    if sfa_web_input_count(two) != 2601 or sfa_web_output_count(two) != 2 { return 7 }
+    if sfa_web_input_a(two, 0) != 26 or sfa_web_input_b(two, 0) != 26 { return 8 }
+    for t in 0 to 18 {
+        sfa_web_step(two, t, if t >= 8 { 1 } else { 0 })
+    }
+    if sfa_web_y1(two) != sfa_web_y1(two) { return 9 }
+    if sfa_web_weight(two, 5201) != sfa_web_weight(two, 5201) { return 10 }
+    sfa_web_destroy(two)
+    print("SFA browser ABI tests passed")
+    return 0
+}
