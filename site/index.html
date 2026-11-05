@@ -8,24 +8,46 @@
   <title>Slow Feature Analysis — Flow</title>
   <link rel="stylesheet" href="./styles.css">
   <script src="./app.js" defer></script>
+  <script src="./wasm/sfa_engine.js" defer></script>
+  <script src="./live.js" defer></script>
 </head>
 <body>
   <a class="skip" href="#experiments">Skip to experiments</a>
   <div class="ambient" aria-hidden="true"></div>
   <header class="topbar wrap">
     <a class="brand" href="#top" aria-label="SFA Flow home"><span class="brand-mark" aria-hidden="true">∿</span><span>SFA<span class="brand-light"> / FLOW</span></span></a>
-    <nav aria-label="Main navigation"><a href="#idea">The idea</a><a href="#experiments">Experiments</a><a href="#methods">Methods</a><a class="nav-github" href="https://github.com/godofecht/SFA-flow" target="_blank" rel="noopener noreferrer">Source code ↗</a></nav>
+    <nav aria-label="Main navigation"><a href="#idea">The idea</a><a href="#live">Run Flow</a><a href="#experiments">Experiments</a><a href="#methods">Methods</a><a class="nav-github" href="https://github.com/godofecht/SFA-flow" target="_blank" rel="noopener noreferrer">Source code ↗</a></nav>
   </header>
   <main id="top">
     <section class="hero wrap">
       <div class="eyebrow"><span class="dot"></span> OPEN RESEARCH NOTEBOOK <span class="eyebrow-divider">/</span> NATIVE FLOW IMPLEMENTATION</div>
       <h1>Discover the<br><em>signal beneath</em><br>the change<span class="period">.</span></h1>
       <p class="hero-sub">Slow Feature Analysis extracts features that remain comparatively stable while observations fluctuate. This site opens the actual traces produced by the <a href="https://github.com/flooooooooooow/flow">Flow</a> port of the Stone–Bray experiments.</p>
-      <div class="hero-actions"><a class="primary-link" href="#experiments">Explore the experiments <span aria-hidden="true">↗</span></a><a class="secondary-link" href="https://github.com/godofecht/Slow-Feature-Analysis" target="_blank" rel="noopener noreferrer">Original C++ research ↗</a></div>
+      <div class="hero-actions"><a class="primary-link" href="#live">Train a Flow model <span aria-hidden="true">↗</span></a><a class="secondary-link" href="https://github.com/godofecht/Slow-Feature-Analysis" target="_blank" rel="noopener noreferrer">Original C++ research ↗</a></div>
       <div class="hero-art" aria-hidden="true"><svg viewBox="0 0 560 310" preserveAspectRatio="xMidYMid meet"><defs><linearGradient id="trace" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#67dfcb"/><stop offset="1" stop-color="#92a4ff"/></linearGradient></defs><g stroke="#354452" stroke-width="1" opacity=".65"><path d="M0 52H560M0 104H560M0 156H560M0 208H560M0 260H560M56 0V310M112 0V310M168 0V310M224 0V310M280 0V310M336 0V310M392 0V310M448 0V310M504 0V310"/></g><path d="M0 153 C24 50 36 45 56 150 S90 262 111 155 S146 45 168 156 S202 265 224 155 S258 48 280 154 S314 259 336 153 S370 53 392 154 S426 250 448 153 S482 70 504 152 S542 231 560 153" fill="none" stroke="#657b9f" opacity=".5" stroke-width="1.5"/><path d="M0 159 C65 143 85 153 120 154 S205 140 246 147 S330 169 372 153 S464 145 514 154 S550 150 560 150" fill="none" stroke="url(#trace)" stroke-width="3.5"/><circle cx="392" cy="154" r="6" fill="#67dfcb"/><circle cx="392" cy="154" r="14" fill="none" stroke="#67dfcb" opacity=".3"/></svg><span>ILLUSTRATION ONLY · NOT EXPERIMENT DATA</span></div>
     </section>
     <section class="strip" aria-label="Project properties"><div class="wrap strip-grid"><div><span>01 / IMPLEMENTATION</span><strong>Native Flow</strong></div><div><span>02 / FEATURE SPACES</span><strong>101 + 2,601 inputs</strong></div><div><span>03 / EXPERIMENTS</span><strong>One &amp; two invariances</strong></div><div><span>04 / EVIDENCE</span><strong>CI-generated traces</strong></div></div></section>
     <section class="intro wrap" id="idea"><div class="section-label">01 — THE RESEARCH QUESTION</div><div><h2>What changes least<br>when everything moves?</h2><p>Ordinary signal representations emphasize the values we observe. Slow Feature Analysis (SFA) instead searches for projections whose temporal variation is small. The experiments here probe whether an adaptive network can recover slowly varying structure from phase-modulated one-hot signals.</p><p>The learner runs a burn-in period, then online adaptation using running statistics, weight updates and, in the two-output case, a decorrelation mechanism. This is a scientific implementation showcase—not a claim of independently established numerical equivalence with the C++ reference.</p></div></section>
+    <section class="live-section" id="live">
+      <div class="wrap">
+        <div class="section-label">02 — LIVE FLOW EXECUTION</div>
+        <div class="live-heading"><div><h2>Watch the network<br><em>learn in real time.</em></h2><p>This is a new training run of the actual <code>src/core.flow</code> solver, compiled to WebAssembly. Adjust the experiment, step through its evolution and inspect learned weights while it runs locally in your browser.</p></div><div class="live-engine-chip"><span class="dot"></span> FLOW → C → WEBASSEMBLY</div></div>
+        <div class="live-panel">
+          <div class="live-setup">
+            <label>NETWORK<select id="live-mode"><option value="1">1 invariant · 101 inputs</option><option value="2">2 invariants · 2,601 inputs</option></select></label>
+            <label>TIME SCALE (ρ)<input type="number" id="live-rate" value="50" min="2" max="200" step="1"></label>
+            <label>PRNG SEED<input type="number" id="live-seed" value="12345" min="1" max="2147483646" step="1"></label>
+            <label>STEPS PER FRAME<input id="live-speed" type="range" min="1" max="6" value="3" aria-label="Training animation speed"></label>
+          </div>
+          <div class="live-transport"><div class="live-buttons"><button id="live-run" class="live-primary" disabled>Start training ↗</button><button id="live-pause" disabled>Pause</button><button id="live-step" disabled>Single step</button><button id="live-reset" disabled>Reset model</button></div><div class="live-phase-box"><span>TRAINING PHASE</span><strong id="live-phase">READY</strong></div></div>
+          <div class="live-progress-line"><progress id="live-progress" max="100" value="0" aria-label="Flow experiment progress"></progress><div><span id="live-percent">0%</span><span id="live-iteration">—</span></div></div>
+          <div id="live-status" class="live-status" role="status" aria-live="polite">Loading native Flow WebAssembly…</div>
+          <div class="live-metrics"><div><span>FLOW OUTPUT (Y)</span><strong id="live-output">—</strong></div><div><span>LOG VARIANCE RATIO</span><strong id="live-objective">—</strong></div><div><span>PEARSON CORRELATION</span><strong id="live-correlation">—</strong></div></div>
+          <div class="live-display"><div class="live-plot"><div class="live-plot-title"><div><span class="chart-eyebrow">EVOLVING TRAINING SERIES</span><h3>Model learning trajectory</h3></div><label>DISPLAY<select id="live-view"><option value="output">Network output</option><option value="objective">SFA objective</option><option value="correlation">Correlation</option></select></label></div><canvas id="live-chart" width="800" height="295" role="img" aria-label="Live Flow training graph"></canvas><div id="live-legend" class="legend" aria-label="Live graph legend"></div><div class="live-caption">X AXIS / ADAPTIVE LEARNING STEP · PLOTTED VALUES ARE MEASURED, NOT INTERPOLATED</div></div><div class="live-field-pane"><span class="chart-eyebrow">INPUT &amp; LEARNED PARAMETERS</span><h3>Weight field</h3><canvas id="live-field" width="360" height="245" role="img" aria-label="Learned weights and active stimulus"></canvas><p id="live-field-caption">Weight visualization appears during training.</p><div class="live-sample" id="live-sample">Input: —</div></div></div>
+          <div class="live-provenance"><span>REAL FLOW SOLVER · BROWSER-LOCAL TRAINING · DETERMINISTIC SEED</span><a href="https://github.com/godofecht/SFA-flow/blob/main/src/browser.flow" target="_blank" rel="noopener noreferrer">Inspect Flow training bridge ↗</a></div>
+        </div>
+      </div>
+    </section>
     <section class="lab-section" id="experiments"><div class="wrap"><div class="section-label">02 — EXPERIMENT EXPLORER</div><div class="lab-header"><div><h2>The experiment,<br><em>not a mock-up.</em></h2><p>Traces are exported from the Flow program by GitHub Actions, validated and packaged as static data. No fabricated demonstration outputs.</p></div><div class="run-badge" id="run-badge">Checking data availability</div></div>
       <div class="lab">
         <div class="lab-controls"><div class="mode-group" role="group" aria-label="Choose experiment"><button class="mode active" type="button" data-mode="one" aria-pressed="true"><span>EXPERIMENT 01</span>One invariant</button><button class="mode" type="button" data-mode="two" aria-pressed="false"><span>EXPERIMENT 02</span>Two invariants</button></div><div class="control-right"><label for="metric">PLOT</label><select id="metric" aria-label="Select plot"></select><button type="button" id="csv" class="download" disabled>Export CSV ↓</button></div></div>
