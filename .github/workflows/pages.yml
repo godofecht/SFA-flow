@@ -1,0 +1,106 @@
+name: Publish SFA research showcase
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "site/**"
+      - "flow.toml"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "site/**"
+      - "flow.toml"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-sfa
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build verified Flow experiment site
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out research repository
+        uses: actions/checkout@v4
+
+      - name: Check out pinned Flow compiler
+        uses: actions/checkout@v4
+        with:
+          repository: flooooooooooow/flow
+          ref: 957b12450eab346dfc31cd019c63da73dfbc86e6
+          path: .flow-toolchain
+
+      - name: Install Flow prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang make libomp-dev
+
+      - name: Validate exporter tests and JavaScript syntax
+        run: |
+          python3 -m unittest discover -s site/tests -v
+          node --check site/app.js
+
+      - name: Run native Flow numerical regression suites
+        env:
+          FLOW_LDFLAGS: -lm
+        run: |
+          ./.flow-toolchain/flow run tests/smoke.flow
+          ./.flow-toolchain/flow run tests/network_stats.flow
+
+      - name: Generate one-invariance experiment
+        env:
+          FLOW_LDFLAGS: -lm
+          SFA_RATE: "5"
+          SFA_SEED: "12345"
+        run: |
+          mkdir -p data
+          ./.flow-toolchain/flow run src/main.flow
+
+      - name: Generate two-invariance experiment
+        env:
+          FLOW_LDFLAGS: -lm
+          SFA_MODE: "2"
+          SFA_RATE: "2"
+          SFA_SEED: "12345"
+        run: |
+          ./.flow-toolchain/flow run src/main.flow
+
+      - name: Package scientific traces and static site
+        run: |
+          mkdir -p _site/data
+          cp site/index.html site/styles.css site/app.js _site/
+          python3 site/build_results.py --data-dir data --output _site/data/results.json --one-rate 5 --two-rate 2 --seed 12345
+          touch _site/.nojekyll
+          test -s _site/data/results.json
+          python3 -m json.tool _site/data/results.json > /dev/null
+
+      - name: Upload GitHub Pages website
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy research showcase
+        id: deployment
+        uses: actions/deploy-pages@v4
