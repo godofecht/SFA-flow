@@ -5,7 +5,7 @@
 
 import sfa.core {
     SfaState, SignalPair, sfa_new, sfa_valid, sfa_step, sfa_f, sfa_free,
-    signal_one, signal_two
+    signal_one, signal_two, sfa_reset_training_history
 }
 
 extern {
@@ -43,6 +43,10 @@ export function sfa_web_step(state: ptr<SfaState>, time: i32, adapt: i32) -> voi
     if state != null and time >= 0 {
         sfa_step(state, time, adapt != 0)
     }
+}
+
+export function sfa_web_reset_history(state: ptr<SfaState>) -> void {
+    if state != null { sfa_reset_training_history(state) }
 }
 
 export function sfa_web_y0(state: ptr<SfaState>) -> f64 {
