@@ -1,0 +1,6 @@
+data/*.csv
+.flow-toolchain/
+build/
+*.o
+*.out
+*.exe
