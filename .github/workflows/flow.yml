@@ -31,6 +31,7 @@ jobs:
         run: |
           ./.flow-toolchain/flow run tests/smoke.flow
           ./.flow-toolchain/flow run tests/network_stats.flow
+          ./.flow-toolchain/flow run tests/parity.flow
           ./.flow-toolchain/flow run tests/browser.flow
 
       - name: Run a complete one-invariance experiment
