@@ -104,10 +104,10 @@ function verify(rate: f64, mode: i32, seed: i64, warm: i32, steps: i32) -> i32 {
         let last_u0: f64 = s.u0
         let last_u1: f64 = s.u1
 
+        let pair: SignalPair = signal_two(rate, t)
         let active: i32 = if mode == 1 {
             signal_one(rate, t) - 1
         } else {
-            let pair: SignalPair = signal_two(rate, t)
             (pair.second - 1) * 51 + pair.first - 1
         }
         if active < 0 or active >= n {
