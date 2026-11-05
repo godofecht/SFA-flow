@@ -28,7 +28,9 @@ jobs:
       - name: Compile and execute Flow numerical tests
         env:
           FLOW_LDFLAGS: -lm
-        run: ./.flow-toolchain/flow run tests/smoke.flow
+        run: |
+          ./.flow-toolchain/flow run tests/smoke.flow
+          ./.flow-toolchain/flow run tests/network_stats.flow
 
       - name: Run a complete one-invariance experiment
         env:
