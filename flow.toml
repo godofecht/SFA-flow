@@ -1,0 +1,11 @@
+[package]
+name = "sfa-flow"
+version = "0.1.0"
+description = "Stone-Bray slow feature analysis implemented entirely in Flow"
+license = "MIT"
+entry = "src/main.flow"
+
+[paths]
+sfa = "src"
+
+[dependencies]

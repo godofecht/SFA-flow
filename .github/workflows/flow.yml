@@ -1,0 +1,59 @@
+name: Native Flow SFA
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  numerical-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out SFA Flow
+        uses: actions/checkout@v4
+
+      - name: Check out pinned Flow compiler
+        uses: actions/checkout@v4
+        with:
+          repository: flooooooooooow/flow
+          ref: 957b12450eab346dfc31cd019c63da73dfbc86e6
+          path: .flow-toolchain
+
+      - name: Install compiler prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang make libomp-dev
+
+      - name: Compile and execute Flow numerical tests
+        env:
+          FLOW_LDFLAGS: -lm
+        run: |
+          ./.flow-toolchain/flow run tests/smoke.flow
+          ./.flow-toolchain/flow run tests/network_stats.flow
+
+      - name: Run a complete one-invariance experiment
+        env:
+          FLOW_LDFLAGS: -lm
+          SFA_RATE: "5"
+          SFA_SEED: "12345"
+        run: |
+          mkdir -p data
+          ./.flow-toolchain/flow run src/main.flow
+          test "$(wc -l < "data/5.000000 values.csv")" -eq 251
+          test "$(wc -l < "data/5.000000 F.csv")" -eq 271
+          test "$(wc -l < "data/5.000000 Cor.csv")" -eq 251
+
+      - name: Run a complete two-invariance experiment
+        env:
+          FLOW_LDFLAGS: -lm
+          SFA_MODE: "2"
+          SFA_RATE: "2"
+          SFA_SEED: "12345"
+        run: |
+          ./.flow-toolchain/flow run src/main.flow
+          test "$(wc -l < data/output1.csv)" -eq 101
+          test "$(wc -l < data/output2.csv)" -eq 101
+          test "$(wc -l < data/weight_vector.csv)" -eq 5203
+          test "$(wc -l < data/cor1.csv)" -eq 101
+          test "$(wc -l < data/cor2.csv)" -eq 101

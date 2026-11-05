@@ -1,0 +1,86 @@
+import sfa.core { SfaState, sfa_new, sfa_valid, sfa_hot, sfa_step, sfa_free }
+import sfa.network {
+    Network, network_new, network_valid, network_forward,
+    network_result, network_set_delta, network_update, network_free
+}
+import sfa.stats {
+    stats_sum, stats_mean, stats_sqsum, stats_stdev, stats_pearson
+}
+
+extern {
+    function fabs(x: f64) -> f64
+}
+
+function close(a: f64, b: f64) -> bool {
+    return fabs(a - b) < 0.00000001
+}
+
+function main() -> i32 {
+    let mut xs: array<f64, 5> = [1.0, 2.0, 3.0, 4.0, 5.0]
+    let mut ys: array<f64, 5> = [2.0, 4.0, 6.0, 8.0, 10.0]
+    let mut zs: array<f64, 5> = [5.0, 4.0, 3.0, 2.0, 1.0]
+    if !close(stats_sum(&xs[0], 5), 15.0) {
+        return 1
+    }
+    if !close(stats_mean(&xs[0], 5), 3.0) {
+        return 2
+    }
+    if !close(stats_sqsum(&xs[0], 5), 55.0) {
+        return 3
+    }
+    if !close(stats_stdev(&xs[0], 5), 1.4142135623730951) {
+        return 4
+    }
+    if !close(stats_pearson(&xs[0], &ys[0], 5), 1.0) {
+        return 5
+    }
+    if !close(stats_pearson(&xs[0], &zs[0], 5), -1.0) {
+        return 6
+    }
+
+    let mut shape: array<i32, 3> = [2, 3, 1]
+    let mut net: Network = network_new(&shape[0], 3, 12345)
+    if !network_valid(&net) {
+        return 7
+    }
+    if net.weight_count != 9 or net.neuron_count != 6 {
+        return 8
+    }
+    let mut inputs: array<f64, 2> = [0.5, 0.8]
+    network_forward(&net, &inputs[0])
+    let old_output: f64 = network_result(&net, 0)
+    if old_output != old_output {
+        return 9
+    }
+    let old_weight: f64 = net.weights[0]
+    network_set_delta(&net, 0, 0, 0, 0.125)
+    network_update(&net)
+    if !close(net.weights[0], old_weight + 0.125) {
+        return 10
+    }
+    network_free(&net)
+
+    # The generic network and SFA's optimized one-layer kernel must have
+    # identical initialized weights for the same seed and topology.
+    let mut simple_shape: array<i32, 2> = [101, 1]
+    let mut generic: Network = network_new(&simple_shape[0], 2, 98765)
+    let mut specialized: SfaState = sfa_new(50.0, 1, 98765)
+    if !network_valid(&generic) or !sfa_valid(&specialized) {
+        return 11
+    }
+    for j in 0 to 101 {
+        if !close(generic.weights[j], specialized.weights[j]) {
+            return 12
+        }
+    }
+    sfa_hot(&specialized, 51, 1)
+    network_forward(&generic, specialized.input)
+    sfa_step(&specialized, 0, false)
+    if !close(network_result(&generic, 0), specialized.y0) {
+        return 13
+    }
+    network_free(&generic)
+    sfa_free(&specialized)
+    print("SFA Flow network and statistics tests passed")
+    return 0
+}
